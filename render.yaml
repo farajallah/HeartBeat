@@ -5,14 +5,14 @@ services:
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1"
+    startCommand: "python run.py"
     healthCheckPath: /health
     runtime: python-3.11
     
     # Environment variables
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11
+        value: 3.11.9
       - key: HOST
         value: 0.0.0.0
       - key: PORT

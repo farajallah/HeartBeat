@@ -1,9 +1,13 @@
 import os
 import sqlite3
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 from app.models import Base
+
+# Load environment variables from .env file first, then system environment
+load_dotenv()
 
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./attendance.db")

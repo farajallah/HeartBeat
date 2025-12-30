@@ -8,6 +8,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import json
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file first, then system environment
+load_dotenv()
 
 from app.database import get_db, create_tables, init_default_settings
 from app.services.attendance import AttendanceService
@@ -22,7 +26,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # Setup templates
 templates = Jinja2Templates(directory="app/templates")
 
-# Security token (read from environment or use default)
+# Security token (read from .env first, then environment, or use default)
 BEARER_TOKEN = os.getenv("BEARER_TOKEN", "your-secret-token-here")
 
 
