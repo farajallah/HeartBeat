@@ -15,7 +15,7 @@ def main():
     if not env_file.exists():
         print("⚠️  Warning: .env file not found")
         print("Copy .env.example to .env and configure BEARER_TOKEN")
-        print()
+        print('')
     
     # Default configuration
     host = os.getenv("HOST", "0.0.0.0")
