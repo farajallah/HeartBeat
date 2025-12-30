@@ -1,0 +1,36 @@
+name: heartbeat-tracker
+services:
+  - name: web
+    type: web
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - port: 8000
+        protocol: http
+        path: /
+    env:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8000
+      - key: RELOAD
+        value: false
+      - key: DATABASE_URL
+        value: ${kooyeb_database_url}
+      - key: BEARER_TOKEN
+        value: ${kooyeb_bearer_token}
+    routes:
+      - path: /
+    health_check:
+      http:
+        path: /health
+        port: 8000
+        interval: 30s
+        timeout: 10s
+        retries: 3
+
+databases:
+  - name: heartbeat-db
+    type: postgresql
+    version: 15
