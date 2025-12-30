@@ -1,12 +1,12 @@
 # HeartBeat Tracker - Render.com Deployment
 
-This project is now configured for deployment on Render.com with the following changes:
+This project is configured for deployment on Render.com with the following changes:
 
 ## Files Added/Modified
 
 ### 1. `render.yaml` - Render Configuration
 - Configures web service with Python 3.11
-- Sets up PostgreSQL database
+- Sets up PostgreSQL database in Frankfurt region (closest to Jordan)
 - Defines environment variables
 - Configures health check endpoint
 
@@ -39,9 +39,9 @@ This project is now configured for deployment on Render.com with the following c
 
 2. **Deploy on Render**
    - Go to render.com
-   - Connect your GitHub repository
+   - Connect your GitHub repository: https://github.com/farajallah/HeartBeat.git
    - Render will automatically detect the `render.yaml` file
-   - The service will be deployed with PostgreSQL database
+   - The service will be deployed with PostgreSQL database in Frankfurt
 
 3. **Environment Variables**
    - Render will automatically set `DATABASE_URL` for PostgreSQL
@@ -60,10 +60,14 @@ python run.py
 ## Production URLs
 
 After deployment, your app will be available at:
-- Main App: `https://your-app-name.onrender.com`
-- Dashboard: `https://your-app-name.onrender.com/dashboard`
-- Health Check: `https://your-app-name.onrender.com/health`
+- Main App: `https://heartbeat-tracker.onrender.com`
+- Dashboard: `https://heartbeat-tracker.onrender.com/dashboard`
+- Health Check: `https://heartbeat-tracker.onrender.com/health`
 
 ## Database Migration
 
 The app automatically creates tables on startup. The database configuration handles both SQLite and PostgreSQL seamlessly.
+
+## Region Configuration
+
+The PostgreSQL database is configured to run in Frankfurt (Germany), which is the closest Render region to Jordan, providing better latency for users in the Middle East.

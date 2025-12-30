@@ -43,8 +43,3 @@ Thumbs.db
 
 # Render
 render.yaml.backup
-
-# Docker
-.dockerignore
-Dockerfile
-Dockerfile.*
