@@ -1,41 +1,34 @@
-from datetime import date, datetime, timedelta
-from typing import Optional, List
-from fastapi import FastAPI, Request, Depends, HTTPException, status, Form
+from datetime import date, datetime, time, timedelta
+from typing import Optional, List, Dict, Any
+from fastapi import FastAPI, Request, Depends, Form, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-import json
+from sqlalchemy import func, and_, or_
 import os
+import json
 from dotenv import load_dotenv
 
 # Load environment variables from .env file first, then system environment
 load_dotenv()
 
-from app.database import get_db, create_tables, init_default_settings
-from app.services.attendance import AttendanceService
-from app.services.statistics import StatisticsService
+from app.database import get_db, create_tables, init_default_settings, initialize_attendance_records
+from app.models import Settings, AttendanceSheet
+from app.services.attendance_service import AttendanceService
 
-# Initialize FastAPI app
-app = FastAPI(title="Time Attendance Tracker", description="Lightweight time attendance and balance tracker")
-
-# Mount static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-
-# Setup templates
-templates = Jinja2Templates(directory="app/templates")
-
-# Security token (read from .env first, then environment, or use default)
-BEARER_TOKEN = os.getenv("BEARER_TOKEN", "your-secret-token-here")
-
-
-# Pydantic models for API
+# Request Models
 class HeartbeatRequest(BaseModel):
+    """Pydantic model for heartbeat request data"""
     device_id: str
+    timezone: Optional[str] = None
+    timestamp: Optional[datetime] = None
 
 
 class SettingsRequest(BaseModel):
+    """Pydantic model for settings update request data"""
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     working_days: List[int]
@@ -43,39 +36,277 @@ class SettingsRequest(BaseModel):
 
 
 class HolidayRequest(BaseModel):
+    """Pydantic model for holiday request data"""
     date: date
     description: str
 
+# Initialize FastAPI app
+app = FastAPI(title="HeartBeat Tracker", description="Simple time attendance tracker")
 
-class CorrectionRequest(BaseModel):
-    date: date
-    corrected_minutes: int
-    reason: str
+# Security
+security = HTTPBearer()
 
-
-# Security dependency
-def verify_token(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
-        )
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verify the API token from the Authorization header."""
+    token = credentials.credentials
+    expected_token = os.getenv("BEARER_TOKEN", "your-secret-token")
     
-    token = auth_header.split(" ")[1]
-    if token != BEARER_TOKEN:
+    if token != expected_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
+            detail="Invalid or missing API token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
+    return True
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# Setup templates
+templates = Jinja2Templates(directory="app/templates")
+
+# Helper functions
+def get_working_days_set(working_days_str: str) -> set:
+    """Convert working days string to a set of day numbers"""
+    if not working_days_str:
+        return set()
+    
+    # Try to parse as JSON array first (e.g., "[0,1,2,3,4]")
+    try:
+        import json
+        parsed = json.loads(working_days_str)
+        if isinstance(parsed, list):
+            return set(parsed)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    
+    # Fall back to comma-separated format (e.g., "Mon,Tue,Wed")
+    return set(day.strip() for day in working_days_str.split(','))
+
+def format_minutes(minutes: int) -> str:
+    """Convert minutes to HH:MM format"""
+    if minutes is None:
+        return "00:00"
+    sign = ""
+    if minutes < 0:
+        sign = "-"
+        minutes = abs(minutes)
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{sign}{hours:02d}:{mins:02d}"
+
+def format_balance_minutes(minutes: int, daily_required_minutes: int) -> str:
+    """Convert minutes to days:hours:minutes format where 1 day = working hours"""
+    if minutes is None or daily_required_minutes is None or daily_required_minutes == 0:
+        return "0d 00:00"
+    
+    sign = ""
+    if minutes < 0:
+        sign = "-"
+        minutes = abs(minutes)
+    
+    # Convert working hours to minutes for calculation
+    working_hours_per_day = daily_required_minutes / 60
+    
+    # Calculate days, hours, and minutes
+    days = int(minutes // daily_required_minutes)
+    remaining_minutes = minutes % daily_required_minutes
+    hours = int(remaining_minutes // 60)
+    mins = remaining_minutes % 60
+    
+    # Format based on the value
+    if days > 0:
+        if hours > 0 or mins > 0:
+            return f"{sign}{days}d {hours:02d}:{mins:02d}"
+        else:
+            return f"{sign}{days}d"
+    elif hours > 0:
+        return f"{sign}{hours:02d}:{mins:02d}"
+    else:
+        return f"{sign}{mins:02d}m"
+
+def calculate_balance(recorded: int, required: int) -> int:
+    """Calculate balance (recorded - required)"""
+    return recorded - required if recorded is not None and required is not None else 0
+
+
+def get_weekday_name(weekday: int) -> str:
+    """Get weekday name from weekday number (0=Monday, 6=Sunday)"""
+    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    return weekdays[weekday] if 0 <= weekday < 7 else ""
 
 
 # Startup event
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and default settings"""
+    """Initialize database and default settings on startup"""
     create_tables()
     init_default_settings()
+    
+    # Ensure all attendance records have time_required populated
+    from app.database import SessionLocal, ensure_time_required_populated
+    db = SessionLocal()
+    try:
+        ensure_time_required_populated(db)
+    finally:
+        db.close()
+
+def get_monthly_summaries(db: Session, start_date: date, end_date: date, settings: Settings):
+    """Calculate monthly summaries for the calendar view"""
+    monthly_data = []
+    current_month = start_date.replace(day=1)
+    today = date.today()
+    
+    while current_month <= end_date:
+        # Only process months that are within the settings period
+        if settings.start_date and settings.end_date:
+            # Get first and last day of the month
+            first_day = current_month.replace(day=1)
+            last_day = (current_month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            
+            # Adjust month boundaries to only include days within the settings period
+            month_start = max(first_day, settings.start_date, start_date)
+            month_end = min(last_day, settings.end_date, end_date)
+            
+            # Skip if no days in this month are within the settings period
+            if month_start > month_end:
+                current_month = current_month.replace(month=current_month.month + 1) if current_month.month < 12 else current_month.replace(year=current_month.year + 1, month=1)
+                continue
+            
+            # Check if this month is entirely in the future
+            is_future_month = month_start > today
+            
+            if is_future_month:
+                # For future months, show 0 values
+                total_recorded = 0
+                total_required = 0
+            else:
+                # Get records for the month (within settings period and up to today)
+                actual_month_end = min(month_end, today)
+                records = db.query(AttendanceSheet).filter(
+                    AttendanceSheet.device_id == settings.device_id,
+                    AttendanceSheet.date.between(month_start, actual_month_end)
+                ).all()
+                
+                # Calculate totals using time_required column
+                total_required = 0
+                total_recorded = 0
+                
+                # Calculate total required minutes from time_required column
+                for record in records:
+                    # Use time_required from the record directly
+                    total_required += record.time_required
+                    
+                    # Calculate recorded minutes from check-in/out if available
+                    if record.check_in and record.check_out:
+                        check_in_mins = record.check_in.hour * 60 + record.check_in.minute
+                        check_out_mins = record.check_out.hour * 60 + record.check_out.minute
+                        if check_out_mins <= check_in_mins:
+                            check_out_mins += 24 * 60  # Add 24 hours
+                        
+                        recorded_mins = check_out_mins - check_in_mins
+                        total_recorded += recorded_mins
+            
+            # Add to monthly data
+            balance = total_recorded - total_required
+            monthly_data.append({
+                "month": current_month.strftime('%Y-%m'),
+                "month_name": current_month.strftime('%B %Y'),
+                "recorded": total_recorded,
+                "required": total_required,
+                "recorded_formatted": format_balance_minutes(total_recorded, settings.daily_required_minutes),
+                "required_formatted": format_balance_minutes(total_required, settings.daily_required_minutes),
+                "balance": balance,
+                "balance_formatted": format_balance_minutes(balance, settings.daily_required_minutes),
+                "is_complete": total_recorded >= total_required if total_required > 0 else True,
+                "is_future": is_future_month if 'is_future_month' in locals() else False
+            })
+        
+        # Move to next month
+        if current_month.month == 12:
+            current_month = current_month.replace(year=current_month.year + 1, month=1)
+        else:
+            current_month = current_month.replace(month=current_month.month + 1)
+    
+    return monthly_data
+
+# Web Pages
+@app.get("/", response_class=RedirectResponse)
+async def root():
+    """Redirect to dashboard"""
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request, db: Session = Depends(get_db)):
+    """Dashboard page with attendance summary"""
+    # Get settings
+    settings = db.query(Settings).first()
+    if not settings:
+        init_default_settings()
+        settings = db.query(Settings).first()
+    
+    # Get current date range from settings or use current month
+    today = date.today()
+    start_date = settings.start_date or today.replace(day=1)
+    # For balance calculation, limit to today (exclude future dates)
+    balance_end_date = min(settings.end_date or (start_date.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1), today)
+    # For monthly display, show all months up to settings end date (including future)
+    display_end_date = settings.end_date or (start_date.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    
+    # Calculate statistics
+    working_days = get_working_days_set(settings.working_days)
+    
+    # Calculate total required minutes for period up to today (balance calculation)
+    # Get attendance records for balance calculation period (up to today)
+    balance_records = db.query(AttendanceSheet).filter(
+        AttendanceSheet.device_id == settings.device_id,
+        AttendanceSheet.date.between(start_date, balance_end_date)
+    ).all()
+    
+    # Create a dictionary of records by date for quick lookup
+    balance_records_by_date = {record.date: record for record in balance_records}
+    
+    # Calculate total required minutes from time_required column
+    total_required = 0
+    total_recorded = 0
+    
+    for record in balance_records:
+        # Use time_required from the record directly
+        total_required += record.time_required
+        
+        # Calculate recorded minutes from check-in/out if available
+        if record.check_in and record.check_out:
+            # Convert time to minutes since midnight for calculation
+            check_in_mins = record.check_in.hour * 60 + record.check_in.minute
+            check_out_mins = record.check_out.hour * 60 + record.check_out.minute
+            
+            # Handle overnight shifts (if check_out is next day)
+            if check_out_mins <= check_in_mins:
+                check_out_mins += 24 * 60  # Add 24 hours
+            
+            recorded_mins = check_out_mins - check_in_mins
+            total_recorded += recorded_mins
+    
+    # Calculate balance
+    balance = total_recorded - total_required
+    
+    # Format for display
+    stats = {
+        "period": f"{start_date.strftime('%b %d, %Y')} to {display_end_date.strftime('%b %d, %Y')}",
+        "balance": format_balance_minutes(balance, settings.daily_required_minutes),
+        "balance_class": "text-green-600" if balance >= 0 else "text-orange-500"
+    }
+    
+    # Get monthly summaries for calendar view (show all months up to settings end date)
+    monthly_summaries = get_monthly_summaries(db, start_date, display_end_date, settings)
+    
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "stats": stats,
+        "monthly_summaries": monthly_summaries,
+        "settings": settings
+    })
 
 
 # API Endpoints
@@ -91,9 +322,49 @@ async def record_heartbeat(
     db: Session = Depends(get_db),
     _: None = Depends(verify_token)
 ):
-    """Record a new heartbeat"""
-    AttendanceService.record_heartbeat(db, request.device_id)
-    return {"status": "success", "message": "Heartbeat recorded"}
+    """Record a new heartbeat and handle check-in/check-out logic"""
+    from datetime import datetime, timezone
+    
+    # Use server's current time with client's timezone if provided
+    client_timezone = request.timezone or 'UTC'
+    try:
+        tz = timezone(client_timezone)
+    except Exception:
+        tz = timezone.utc
+    
+    # Store timezone-aware datetime objects
+    now = datetime.now(tz)
+    current_date = now.date()
+    current_time = now.time()
+    
+    # Check if attendance record exists for this date
+    existing_record = db.query(AttendanceSheet).filter(
+        AttendanceSheet.device_id == request.device_id,
+        AttendanceSheet.date == current_date
+    ).first()
+    
+    if existing_record:
+        # Record exists - update check-in/check-out
+        if existing_record.check_in is None:
+            # First heartbeat of the day - set check-in to NOW, leave check_out as None
+            existing_record.check_in = current_time
+            existing_record.check_out = None
+            db.commit()
+            return {"status": "success", "message": "Check-in recorded", "action": "check_in"}
+        elif existing_record.check_out is None:
+            # Already checked in - set check-out to NOW (don't change check-in)
+            existing_record.check_out = current_time
+            db.commit()
+            return {"status": "success", "message": "Check-out recorded", "action": "check_out"}
+        else:
+            # Already checked in and out - update check-out to latest time
+            existing_record.check_out = current_time
+            db.commit()
+            return {"status": "success", "message": "Check-out updated", "action": "check_out_updated"}
+    else:
+        # No record exists - create new one (handled by AttendanceService)
+        AttendanceService.record_heartbeat(db, request.device_id)
+        return {"status": "success", "message": "Heartbeat recorded", "action": "new_record"}
 
 
 @app.get("/api/settings")
@@ -131,7 +402,14 @@ async def update_settings(
         daily_required_minutes=request.daily_required_minutes
     )
     
+    # Recalculate time_required for all attendance records
     working_days = json.loads(settings.working_days) if settings.working_days else []
+    AttendanceService.update_time_required_for_all(
+        db, 
+        settings.device_id, 
+        settings.daily_required_minutes, 
+        working_days
+    )
     
     return {
         "start_date": settings.start_date,
@@ -190,63 +468,6 @@ async def delete_holiday(
     return {"status": "success", "message": "Holiday deleted"}
 
 
-@app.get("/api/corrections")
-async def get_corrections(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db),
-    _: None = Depends(verify_token)
-):
-    """Get corrections data"""
-    start_date_obj = None
-    end_date_obj = None
-    
-    if start_date:
-        try:
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start date format")
-    
-    if end_date:
-        try:
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end date format")
-    
-    corrections_data = StatisticsService.get_corrections_data(db, start_date_obj, end_date_obj)
-    
-    return [
-        {
-            "date": item["date"],
-            "effective_minutes": item["effective_minutes"],
-            "required_minutes": item["required_minutes"],
-            "corrected_minutes": item["corrected_minutes"],
-            "correction_reason": item["correction_reason"],
-            "is_working_day": item["is_working_day"],
-            "is_holiday": item["is_holiday"]
-        }
-        for item in corrections_data
-    ]
-
-
-@app.post("/api/corrections")
-async def add_correction(
-    request: CorrectionRequest,
-    db: Session = Depends(get_db),
-    _: None = Depends(verify_token)
-):
-    """Add or update a correction"""
-    correction = AttendanceService.add_correction(
-        db, request.date, request.corrected_minutes, request.reason
-    )
-    
-    return {
-        "date": correction.date,
-        "corrected_minutes": correction.corrected_minutes,
-        "reason": correction.reason
-    }
-
-
 # Web Pages
 
 @app.get("/", response_class=HTMLResponse)
@@ -255,27 +476,10 @@ async def root():
     return RedirectResponse(url="/dashboard")
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request, db: Session = Depends(get_db)):
-    """Dashboard page"""
-    dashboard_data = StatisticsService.get_dashboard_data(db)
-    chart_data = StatisticsService.get_chart_data(db)
-    
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "total_balance": dashboard_data["total_balance_hours"],
-        "monthly_data": dashboard_data["monthly_data"],
-        "chart_labels": json.dumps(chart_data["labels"]),
-        "chart_worked": json.dumps(chart_data["worked"]),
-        "chart_required": json.dumps(chart_data["required"]),
-        "chart_balance": json.dumps(chart_data["balance"]),
-    })
-
-
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, db: Session = Depends(get_db)):
     """Settings page"""
-    settings = AttendanceService.get_settings(db)
+    settings = AttendanceService.get_settings_cached(db)
     holidays = AttendanceService.get_holidays(db)
     
     working_days = []
@@ -283,9 +487,18 @@ async def settings_page(request: Request, db: Session = Depends(get_db)):
         try:
             working_days = json.loads(settings.working_days)
         except (json.JSONDecodeError, TypeError):
-            working_days = [1, 2, 3, 4, 5]  # Default Monday-Friday
+            working_days = [0, 1, 2, 3, 4]  # Default Mon-Fri (Sat & Sun are weekends)
     
-    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    # Week starting from Monday with correct Python weekday numbers
+    weekday_names = [
+        {"name": "Saturday", "weekday": 5},
+        {"name": "Sunday", "weekday": 6},
+        {"name": "Monday", "weekday": 0},
+        {"name": "Tuesday", "weekday": 1},
+        {"name": "Wednesday", "weekday": 2},
+        {"name": "Thursday", "weekday": 3},
+        {"name": "Friday", "weekday": 4},
+    ]
     
     return templates.TemplateResponse("settings.html", {
         "request": request,
@@ -303,15 +516,15 @@ async def update_settings_form(
     start_date: Optional[str] = Form(None),
     end_date: Optional[str] = Form(None),
     daily_required_hours: Optional[str] = Form("8"),
+    saturday: Optional[str] = Form(None),
+    sunday: Optional[str] = Form(None),
     monday: Optional[str] = Form(None),
     tuesday: Optional[str] = Form(None),
     wednesday: Optional[str] = Form(None),
     thursday: Optional[str] = Form(None),
     friday: Optional[str] = Form(None),
-    saturday: Optional[str] = Form(None),
-    sunday: Optional[str] = Form(None),
 ):
-    """Handle settings form submission"""
+    """Handle settings form submission and initialize attendance records"""
     # Parse dates
     start_date_obj = None
     end_date_obj = None
@@ -328,21 +541,28 @@ async def update_settings_form(
         except ValueError:
             pass  # Keep as None if invalid
     
-    # Parse working days
+    # Parse working days (correct Python weekday numbers: Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6)
     working_days = []
+    if saturday: working_days.append(5)
+    if sunday: working_days.append(6)
     if monday: working_days.append(0)
     if tuesday: working_days.append(1)
     if wednesday: working_days.append(2)
     if thursday: working_days.append(3)
     if friday: working_days.append(4)
-    if saturday: working_days.append(5)
-    if sunday: working_days.append(6)
     
     # Parse daily required hours
     try:
         daily_required_minutes = int(float(daily_required_hours) * 60)
     except (ValueError, TypeError):
         daily_required_minutes = 8 * 60  # Default 8 hours
+    
+    # Get current settings to check if dates are being updated
+    current_settings = AttendanceService.get_settings(db)
+    dates_changed = (current_settings and 
+                    (current_settings.start_date != start_date_obj or 
+                     current_settings.end_date != end_date_obj or
+                     set(json.loads(current_settings.working_days)) != set(working_days)))
     
     # Update settings
     AttendanceService.update_settings(
@@ -353,9 +573,113 @@ async def update_settings_form(
         daily_required_minutes=daily_required_minutes
     )
     
+    # Update attendance records after settings are saved
+    if start_date_obj and end_date_obj:
+        # Clean up any orphaned records (records with device_id not in settings)
+        if current_settings:
+            # Delete records with device_id that doesn't exist in settings
+            orphaned_records = db.query(AttendanceSheet).filter(
+                AttendanceSheet.device_id.notin_(
+                    db.query(Settings.device_id)
+                )
+            ).all()
+            
+            if orphaned_records:
+                print(f"Cleaning up {len(orphaned_records)} orphaned attendance records")
+                for record in orphaned_records:
+                    db.delete(record)
+                db.commit()
+        
+        # Get all existing records in the period
+        existing_records = db.query(AttendanceSheet).filter(
+            AttendanceSheet.date.between(start_date_obj, end_date_obj)
+        ).all()
+        
+        # Create a dictionary of existing records by date for quick lookup
+        existing_by_date = {record.date: record for record in existing_records}
+        
+        # Get all holidays for the period
+        holidays_list = AttendanceService.get_holidays(db, start_date_obj, end_date_obj)
+        holidays = {h['date']: h for h in holidays_list}
+        
+        # Prepare batch operations
+        records_to_add = []
+        records_to_update = []
+        current_date = start_date_obj
+        device_id = current_settings.device_id if current_settings else "default"
+        
+        while current_date <= end_date_obj:
+            day_of_week = current_date.weekday()
+            
+            # Determine category based on priority: Holiday > Weekend > Workday
+            if current_date in holidays:
+                category = 90  # Holiday
+                description = holidays[current_date].get('description', 'Holiday')
+            elif day_of_week not in working_days:
+                category = 1  # Weekend
+                description = None
+            else:
+                category = 0  # Workday
+                description = None
+            
+            if current_date in existing_by_date:
+                # Update existing record - preserve category, check-in, check-out
+                existing_record = existing_by_date[current_date]
+                existing_record.device_id = device_id
+                # Only update time_required based on existing category and new settings
+                existing_record.time_required = AttendanceService.calculate_time_required(existing_record.category, daily_required_minutes)
+                # Add to update list as dictionary (only update time_required)
+                records_to_update.append({
+                    'id': existing_record.id,
+                    'device_id': device_id,
+                    'time_required': existing_record.time_required
+                })
+            else:
+                # Create new record
+                records_to_add.append({
+                    "date": current_date,
+                    "category": category,
+                    "device_id": device_id,
+                    "description": description,
+                    "time_required": AttendanceService.calculate_time_required(category, daily_required_minutes)
+                })
+            
+            current_date += timedelta(days=1)
+        
+        # Perform batch operations
+        try:
+            # Bulk insert new records
+            if records_to_add:
+                db.bulk_insert_mappings(AttendanceSheet, records_to_add)
+            
+            # Bulk update existing records
+            if records_to_update:
+                db.bulk_update_mappings(AttendanceSheet, records_to_update)
+            
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"Error updating attendance records: {e}")
+            # Try one by one if batch operations fail
+            for record in records_to_add:
+                try:
+                    db.add(AttendanceSheet(**record))
+                    db.commit()
+                except Exception as e2:
+                    db.rollback()
+                    print(f"Failed to insert record for {record['date']}: {e2}")
+            
+            for record in records_to_update:
+                try:
+                    db.merge(record)
+                    db.commit()
+                except Exception as e2:
+                    db.rollback()
+                    print(f"Failed to update record for {record.date}: {e2}")
+    
     return RedirectResponse(url="/settings", status_code=303)
 
-
+# ... (rest of the code remains the same)
 @app.post("/holidays")
 async def add_holiday_form(
     request: Request,
@@ -388,63 +712,6 @@ async def delete_holiday_form(
         pass  # Ignore invalid dates
     
     return RedirectResponse(url="/settings", status_code=303)
-
-
-@app.get("/corrections", response_class=HTMLResponse)
-async def corrections_page(
-    request: Request,
-    db: Session = Depends(get_db),
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-):
-    """Corrections page"""
-    start_date_obj = None
-    end_date_obj = None
-    
-    if start_date:
-        try:
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
-        except ValueError:
-            pass
-    
-    if end_date:
-        try:
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
-        except ValueError:
-            pass
-    
-    # Default to last 30 days if no dates provided
-    if not start_date_obj and not end_date_obj:
-        end_date_obj = date.today()
-        start_date_obj = end_date_obj - timedelta(days=30)
-    
-    corrections_data = StatisticsService.get_corrections_data(db, start_date_obj, end_date_obj)
-    
-    return templates.TemplateResponse("corrections.html", {
-        "request": request,
-        "corrections_data": corrections_data,
-        "start_date": start_date_obj,
-        "end_date": end_date_obj,
-    })
-
-
-@app.post("/corrections")
-async def update_correction_form(
-    request: Request,
-    db: Session = Depends(get_db),
-    correction_date: str = Form(...),
-    corrected_minutes: str = Form(...),
-    reason: str = Form(""),
-):
-    """Handle correction form submission"""
-    try:
-        date_obj = datetime.strptime(correction_date, "%Y-%m-%d").date()
-        minutes = int(corrected_minutes)
-    except ValueError:
-        return RedirectResponse(url="/corrections", status_code=303)
-    
-    AttendanceService.add_correction(db, date_obj, minutes, reason)
-    return RedirectResponse(url="/corrections", status_code=303)
 
 
 if __name__ == "__main__":

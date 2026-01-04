@@ -1,14 +1,15 @@
-# Lightweight Time Attendance & Balance Tracker
+# HeartBeat - Time Attendance & Balance Tracker
 
 A simple, deterministic time attendance system with local heartbeat agent and web dashboard.
 
 ## Features
 
-- **Local heartbeat agent** that logs work time every minute
+- **Local heartbeat agent** that tracks check-in/check-out times
 - **FastAPI web server** with SQLite database
-- **Web dashboard** with charts and statistics
-- **Settings management** for working days and holidays
-- **Correction system** for manual adjustments
+- **Clean web dashboard** with balance overview and monthly summaries
+- **Settings management** for working days, holidays, and daily requirements
+- **Intelligent balance calculation** based on `time_required` and actual work time
+- **Holiday/Leave management** with automatic time calculation
 - **Minimal dependencies** and simple deployment
 
 ## Quick Start
@@ -29,10 +30,10 @@ cp .env.example .env
 ### 3. Start the Server
 
 ```bash
-uvicorn app.main:app --reload
+python run.py
 ```
 
-The server will be available at `http://localhost:8000`
+The server will be available at `http://localhost:8888`
 
 ### 4. Set Up Heartbeat Agent
 
@@ -45,7 +46,7 @@ The heartbeat agent should be run via OS scheduler every minute:
 crontab -e
 
 # Add line to run every minute
-* * * * * cd /path/to/heartbeat && python app/agent/heartbeat.py
+* * * * * cd /path/to/HeartBeat && python app/agent/heartbeat.py
 ```
 
 #### Windows (Task Scheduler)
@@ -56,56 +57,57 @@ crontab -e
 4. Action: Start program
    - Program: `python`
    - Arguments: `app\agent\heartbeat.py`
-   - Start in: `w:\heartbeat`
+   - Start in: `path\to\HeartBeat`
 
 ## Architecture
 
 ### Database Schema
 
-- **heartbeat**: Raw heartbeat records (immutable)
-- **daily_attendance**: Cached daily minutes (derived)
-- **correction**: Manual corrections (override recorded)
-- **settings**: System configuration
+- **attendance_sheet**: Main attendance records with check-in/out times
+- **settings**: System configuration (working days, daily requirements)
 - **holiday**: Holiday definitions
 
-### Core Rules
+### Core Features
 
-1. **All recorded minutes are valid** - No working hour restrictions
-2. **Raw heartbeats are immutable** - Never modified or deleted
-3. **Corrections override derived values** - Don't alter raw data
-4. **Expected minutes are policy-based only** - For balance calculation
+1. **Smart Time Calculation**: Uses `time_required` column for accurate balance
+2. **Category-Based Logic**: Workdays, weekends, holidays, leaves handled automatically
+3. **Preserved Data**: Settings updates don't affect existing check-in/out records
+4. **Clean Balance**: Only shows balance in dashboard, detailed data in monthly view
 
 ### API Endpoints
 
 - `POST /api/heartbeat` - Record heartbeat (requires auth)
 - `GET/POST /api/settings` - Manage settings
 - `GET/POST/DELETE /api/holidays` - Manage holidays
-- `GET/POST /api/corrections` - Manage corrections
 
 ### Web Pages
 
-- `/dashboard` - Main dashboard with charts and balance
+- `/dashboard` - Main dashboard with balance and monthly overview
 - `/settings` - Configure working days, holidays, and requirements
-- `/corrections` - View and edit daily corrections
 
 ## Usage
 
 ### Dashboard
 
-View total balance, monthly summaries, and attendance charts.
+- **Upper Section**: Shows current balance only (green/orange based on status)
+- **Lower Section**: Monthly summaries with detailed breakdown
+- **Balance Calculation**: `balance = (check_out - check_in) - time_required`
 
 ### Settings
 
 - Set reporting period (start/end dates)
-- Configure working days (checkboxes)
-- Set daily required hours
-- Add/remove holidays
+- Configure working days (Mon-Fri by default)
+- Set daily required hours (e.g., 7.5 hours = 450 minutes)
+- Add/remove holidays (automatically sets `time_required = 0`)
+- **Important**: Settings updates preserve existing check-in/out data
 
-### Corrections
+### Time Categories
 
-- View recorded vs required minutes per day
-- Add corrections to override recorded attendance
-- Filter by date range
+- **Category 0**: Workday → `time_required = daily_required_minutes`
+- **Category 1**: Weekend → `time_required = 0`
+- **Category 10**: Half-day leave → `time_required = daily_required_minutes // 2`
+- **Category 11**: Full-day leave → `time_required = 0`
+- **Category 90**: Holiday → `time_required = 0`
 
 ## Development
 
@@ -117,22 +119,21 @@ app/
  ├── database.py          # Database connection and setup
  ├── models.py            # SQLAlchemy models
  ├── services/
- │    ├── attendance.py   # Attendance calculation logic
- │    └── statistics.py   # Statistics and chart data
+ │    └── attendance_service.py   # Attendance calculation logic
  ├── templates/           # Jinja2 HTML templates
  ├── static/             # CSS and JavaScript
  └── agent/
       └── heartbeat.py    # Local heartbeat agent
 ```
 
-### Running Tests
+### Testing
 
 ```bash
 # Test heartbeat agent
-python app/agent/heartbeat.py --test
+python app/agent/heartbeat.py --once
 
-# Test connection
-python app/agent/heartbeat.py --test
+# Test database operations
+python -c "from app.database import create_tables; create_tables()"
 ```
 
 ### Database
@@ -145,13 +146,30 @@ The system uses SQLite with a single file `attendance.db`. Database is created a
 - Token configured via `BEARER_TOKEN` environment variable
 - Web interface doesn't require authentication (local use assumed)
 
+## Recent Improvements
+
+### Balance Calculation Overhaul
+- Simplified to use only `time_required` and check-in/out difference
+- Removed complex category-based calculations from dashboard
+- Consistent color scheme (green for positive, orange for negative)
+
+### Settings Preservation
+- Settings updates no longer overwrite existing attendance data
+- Only `time_required` is recalculated when settings change
+- Check-in/out times and categories are preserved
+
+### Database Constraints
+- Added `time_required` column with non-negative constraint
+- Fixed check-in/check-out constraint violations
+- Proper handling of same-time check-in/check-out scenarios
+
 ## Troubleshooting
 
 ### Agent Not Working
 
 1. Check `BEARER_TOKEN` is set correctly
 2. Verify server is running at configured URL
-3. Check agent logs: `~/.heartbeat_agent.log`
+3. Test manually: `python app/agent/heartbeat.py --once`
 
 ### Database Issues
 

@@ -3,6 +3,10 @@
 Convenient script to run the attendance tracker server
 """
 
+from dotenv import load_dotenv
+# Load environment variables
+load_dotenv()
+
 import uvicorn
 import os
 from pathlib import Path
@@ -26,7 +30,6 @@ def main():
     print(f"📍 Server: http://{host}:{port}")
     print(f"📊 Dashboard: http://{host}:{port}/dashboard")
     print(f"⚙️  Settings: http://{host}:{port}/settings")
-    print(f"🔧 Corrections: http://{host}:{port}/corrections")
     print('')
     
     # Run the server

@@ -4,6 +4,36 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
 from app.models import Heartbeat, DailyAttendance, Correction, Settings, Holiday
 import json
+import time
+
+# Simple in-memory cache
+_cache = {}
+_cache_ttl = {}
+
+class CacheManager:
+    @staticmethod
+    def get(key: str):
+        """Get cached data if not expired"""
+        if key in _cache and key in _cache_ttl:
+            if time.time() < _cache_ttl[key]:
+                return _cache[key]
+            else:
+                # Expired, remove from cache
+                del _cache[key]
+                del _cache_ttl[key]
+        return None
+    
+    @staticmethod
+    def set(key: str, value, ttl_seconds: int = 300):
+        """Set cached data with TTL (default 5 minutes)"""
+        _cache[key] = value
+        _cache_ttl[key] = time.time() + ttl_seconds
+    
+    @staticmethod
+    def clear():
+        """Clear all cache"""
+        _cache.clear()
+        _cache_ttl.clear()
 
 
 class AttendanceService:
@@ -17,6 +47,9 @@ class AttendanceService:
         
         # Update daily attendance cache
         AttendanceService._update_daily_attendance(db, heartbeat.ts.date())
+        
+        # Clear relevant caches
+        CacheManager.clear()  # Clear all cache when new data arrives
     
     @staticmethod
     def _update_daily_attendance(db: Session, target_date: date) -> None:
@@ -61,7 +94,8 @@ class AttendanceService:
     @staticmethod
     def update_settings(db: Session, **kwargs) -> Settings:
         """Update application settings"""
-        settings = AttendanceService.get_settings(db)
+        # Get settings directly from database (not cached) for update
+        settings = db.query(Settings).filter(Settings.id == 1).first()
         if not settings:
             settings = Settings(id=1)
             db.add(settings)
@@ -71,7 +105,9 @@ class AttendanceService:
                 setattr(settings, key, value)
         
         db.commit()
-        db.refresh(settings)
+        
+        # Clear cache after settings update
+        CacheManager.clear()
         
         # Recalculate attendance after settings change
         AttendanceService.recalculate_all_attendance(db)
@@ -189,6 +225,87 @@ class AttendanceService:
         return effective - required
     
     @staticmethod
+    def get_date_range_data_batch(db: Session, start_date: date, end_date: date) -> List[Dict]:
+        """Get attendance data for date range using batch queries"""
+        from app.models import Heartbeat, DailyAttendance, Correction, Holiday, Settings
+        from sqlalchemy import func, and_, or_
+        import json
+        
+        # Get all heartbeats in date range
+        heartbeats_by_date = {}
+        heartbeats = db.query(
+            func.date(Heartbeat.ts).label('date'),
+            func.count(Heartbeat.id).label('count')
+        ).filter(
+            func.date(Heartbeat.ts) >= start_date,
+            func.date(Heartbeat.ts) <= end_date
+        ).group_by(func.date(Heartbeat.ts)).all()
+        
+        for hb in heartbeats:
+            heartbeats_by_date[hb.date] = hb.count
+        
+        # Get all corrections in date range
+        corrections_by_date = {}
+        corrections = db.query(Correction).filter(
+            Correction.date >= start_date,
+            Correction.date <= end_date
+        ).all()
+        
+        for corr in corrections:
+            corrections_by_date[corr.date] = corr
+        
+        # Get all holidays in date range
+        holidays = db.query(Holiday).filter(
+            Holiday.date >= start_date,
+            Holiday.date <= end_date
+        ).all()
+        holiday_dates = {h.date for h in holidays}
+        
+        # Get settings once (cached)
+        settings = AttendanceService.get_settings_cached(db)
+        working_days = json.loads(settings.working_days) if settings and settings.working_days else [6, 0, 1, 2, 3]  # Default Sat-Wed
+        daily_required = settings.daily_required_minutes if settings else 8 * 60
+        
+        # Generate data for each day
+        data = []
+        current_date = start_date
+        
+        while current_date <= end_date:
+            # Calculate effective minutes
+            heartbeat_count = heartbeats_by_date.get(current_date, 0)
+            effective_minutes = heartbeat_count
+            
+            # Calculate required minutes
+            weekday = current_date.weekday()
+            is_working_day = weekday in working_days
+            is_holiday = current_date in holiday_dates
+            
+            if is_working_day and not is_holiday:
+                required_minutes = daily_required
+            else:
+                required_minutes = 0
+            
+            # Apply correction if exists
+            correction = corrections_by_date.get(current_date)
+            if correction:
+                effective_minutes = correction.corrected_minutes
+            
+            balance_minutes = effective_minutes - required_minutes
+            
+            data.append({
+                'date': current_date,
+                'effective_minutes': effective_minutes,
+                'required_minutes': required_minutes,
+                'balance_minutes': balance_minutes,
+                'is_working_day': is_working_day,
+                'is_holiday': is_holiday,
+            })
+            
+            current_date += timedelta(days=1)
+        
+        return data
+    
+    @staticmethod
     def get_date_range_data(db: Session, start_date: date, end_date: date) -> List[Dict]:
         """Get attendance data for date range"""
         data = []
@@ -211,6 +328,54 @@ class AttendanceService:
             current_date += timedelta(days=1)
         
         return data
+    
+    @staticmethod
+    def get_settings_cached(db: Session):
+        """Get settings with caching"""
+        cache_key = "settings"
+        cached_settings = CacheManager.get(cache_key)
+        if cached_settings:
+            return cached_settings
+        
+        settings = AttendanceService.get_settings(db)
+        CacheManager.set(cache_key, settings, ttl_seconds=600)  # Cache for 10 minutes
+        return settings
+    
+    @staticmethod
+    def get_monthly_summary_batch(db: Session, year: int, month: int) -> Dict:
+        """Get monthly attendance summary using batch queries with caching"""
+        cache_key = f"monthly_summary_{year}_{month}"
+        cached_summary = CacheManager.get(cache_key)
+        if cached_summary:
+            return cached_summary
+        
+        # Get first and last day of month
+        first_day = date(year, month, 1)
+        if month == 12:
+            last_day = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            last_day = date(year, month + 1, 1) - timedelta(days=1)
+        
+        # Use batch query method
+        monthly_data = AttendanceService.get_date_range_data_batch(db, first_day, last_day)
+        
+        # Calculate totals
+        total_effective = sum(item['effective_minutes'] for item in monthly_data)
+        total_required = sum(item['required_minutes'] for item in monthly_data)
+        total_balance = total_effective - total_required
+        
+        result = {
+            'year': year,
+            'month': month,
+            'total_effective_minutes': total_effective,
+            'total_required_minutes': total_required,
+            'total_balance_minutes': total_balance,
+            'days': monthly_data
+        }
+        
+        # Cache for 5 minutes
+        CacheManager.set(cache_key, result, ttl_seconds=300)
+        return result
     
     @staticmethod
     def get_monthly_summary(db: Session, year: int, month: int) -> Dict:

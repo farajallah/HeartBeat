@@ -12,6 +12,7 @@ Environment variables:
     SERVER_URL: Base URL of the attendance server (default: http://localhost:8000)
     BEARER_TOKEN: Authentication token (required)
     DEVICE_ID: Unique device identifier (default: hostname)
+    TIMEZONE: Timezone for the device (default: UTC)
 """
 
 import os
@@ -21,13 +22,18 @@ import json
 import logging
 import platform
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file first, then system environment
+load_dotenv()
 
 # Configuration
-SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:8000')
-BEARER_TOKEN = os.getenv('BEARER_TOKEN')
+SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:8888')
+BEARER_TOKEN = os.getenv('BEARER_TOKEN')  # Use BEARER_TOKEN to match .env file
 DEVICE_ID = os.getenv('DEVICE_ID', platform.node().split('.')[0])
+TIMEZONE = os.getenv('TIMEZONE', 'UTC')
 HEARTBEAT_ENDPOINT = f"{SERVER_URL}/api/heartbeat"
 TIMEOUT = 10  # seconds
 
@@ -49,6 +55,7 @@ class HeartbeatAgent:
         self.server_url = SERVER_URL
         self.bearer_token = BEARER_TOKEN
         self.device_id = DEVICE_ID
+        self.timezone = TIMEZONE
         self.endpoint = HEARTBEAT_ENDPOINT
         
         # Validate configuration
@@ -59,6 +66,7 @@ class HeartbeatAgent:
         logger.info(f"Heartbeat agent initialized")
         logger.info(f"Device ID: {self.device_id}")
         logger.info(f"Server: {self.server_url}")
+        logger.info(f"Timezone: {self.timezone}")
 
     def send_heartbeat(self) -> bool:
         """Send a single heartbeat to the server"""
@@ -70,7 +78,7 @@ class HeartbeatAgent:
         
         payload = {
             'device_id': self.device_id,
-            'timestamp': datetime.utcnow().isoformat()
+            'timezone': self.timezone
         }
         
         try:
