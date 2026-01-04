@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:8888')
+SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:8000')
 BEARER_TOKEN = os.getenv('BEARER_TOKEN')  # Use BEARER_TOKEN to match .env file
 DEVICE_ID = os.getenv('DEVICE_ID', platform.node().split('.')[0])
 TIMEZONE = os.getenv('TIMEZONE', 'UTC')
