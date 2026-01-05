@@ -59,8 +59,9 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         )
     return True
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+# Mount static files (only if directory exists)
+if os.path.exists("app/static"):
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Setup templates
 templates = Jinja2Templates(directory="app/templates")
