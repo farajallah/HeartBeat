@@ -46,11 +46,11 @@
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                         </div>
 
-                        <!-- Daily Required Hours -->
+                        <!-- Daily Working Hours -->
                         <div>
-                            <label for="daily_required_hours" class="block text-sm font-medium text-gray-700">Daily Required Hours</label>
-                            <input type="number" id="daily_required_hours" name="daily_required_hours"
-                                   value="{% if settings %}{{ settings.daily_required_minutes / 60 }}{% else %}8{% endif %}"
+                            <label for="daily_working_hours" class="block text-sm font-medium text-gray-700">Daily Working Hours</label>
+                            <input type="number" id="daily_working_hours" name="daily_working_hours"
+                                   value="{% if settings %}{{ settings.daily_working_hours }}{% else %}8{% endif %}"
                                    step="0.5" min="0" max="24"
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                         </div>

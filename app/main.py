@@ -32,7 +32,7 @@ class SettingsRequest(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     working_days: List[int]
-    daily_required_minutes: int
+    daily_working_hours: float = 8.0
 
 
 class HolidayRequest(BaseModel):
@@ -109,8 +109,8 @@ def format_balance_minutes(minutes: int, daily_required_minutes: int) -> str:
     working_hours_per_day = daily_required_minutes / 60
     
     # Calculate days, hours, and minutes
-    days = int(minutes // daily_required_minutes)
-    remaining_minutes = minutes % daily_required_minutes
+    days = int(minutes // int(daily_required_minutes))
+    remaining_minutes = minutes % int(daily_required_minutes)
     hours = int(remaining_minutes // 60)
     mins = remaining_minutes % 60
     
@@ -197,27 +197,21 @@ def get_monthly_summaries(db: Session, start_date: date, end_date: date, setting
                     # Use time_required from the record directly
                     total_required += record.time_required
                     
-                    # Calculate recorded minutes from check-in/out if available
-                    if record.check_in and record.check_out:
-                        check_in_mins = record.check_in.hour * 60 + record.check_in.minute
-                        check_out_mins = record.check_out.hour * 60 + record.check_out.minute
-                        if check_out_mins <= check_in_mins:
-                            check_out_mins += 24 * 60  # Add 24 hours
-                        
-                        recorded_mins = check_out_mins - check_in_mins
-                        total_recorded += recorded_mins
+                    # Use time_recorded directly (already in minutes)
+                    total_recorded += record.time_recorded
             
             # Add to monthly data
             balance = total_recorded - total_required
+            daily_minutes = int(settings.daily_working_hours * 60)
             monthly_data.append({
                 "month": current_month.strftime('%Y-%m'),
                 "month_name": current_month.strftime('%B %Y'),
                 "recorded": total_recorded,
                 "required": total_required,
-                "recorded_formatted": format_balance_minutes(total_recorded, settings.daily_required_minutes),
-                "required_formatted": format_balance_minutes(total_required, settings.daily_required_minutes),
+                "recorded_formatted": format_balance_minutes(total_recorded, daily_minutes),
+                "required_formatted": format_balance_minutes(total_required, daily_minutes),
                 "balance": balance,
-                "balance_formatted": format_balance_minutes(balance, settings.daily_required_minutes),
+                "balance_formatted": format_balance_minutes(balance, daily_minutes),
                 "is_complete": total_recorded >= total_required if total_required > 0 else True,
                 "is_future": is_future_month if 'is_future_month' in locals() else False
             })
@@ -275,18 +269,8 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         # Use time_required from the record directly
         total_required += record.time_required
         
-        # Calculate recorded minutes from check-in/out if available
-        if record.check_in and record.check_out:
-            # Convert time to minutes since midnight for calculation
-            check_in_mins = record.check_in.hour * 60 + record.check_in.minute
-            check_out_mins = record.check_out.hour * 60 + record.check_out.minute
-            
-            # Handle overnight shifts (if check_out is next day)
-            if check_out_mins <= check_in_mins:
-                check_out_mins += 24 * 60  # Add 24 hours
-            
-            recorded_mins = check_out_mins - check_in_mins
-            total_recorded += recorded_mins
+        # Use time_recorded directly (already in minutes)
+        total_recorded += record.time_recorded
     
     # Calculate balance
     balance = total_recorded - total_required
@@ -294,7 +278,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     # Format for display
     stats = {
         "period": f"{start_date.strftime('%b %d, %Y')} to {display_end_date.strftime('%b %d, %Y')}",
-        "balance": format_balance_minutes(balance, settings.daily_required_minutes),
+        "balance": format_balance_minutes(balance, int(settings.daily_working_hours * 60)),
         "balance_class": "text-green-600" if balance >= 0 else "text-orange-500"
     }
     
@@ -322,49 +306,11 @@ async def record_heartbeat(
     db: Session = Depends(get_db),
     _: None = Depends(verify_token)
 ):
-    """Record a new heartbeat and handle check-in/check-out logic"""
-    from datetime import datetime, timezone
+    """Record a new heartbeat - now simply increments time_recorded by 1 minute"""
+    # Use the simplified attendance service
+    record = AttendanceService.record_heartbeat(db, request.device_id)
     
-    # Use server's current time with client's timezone if provided
-    client_timezone = request.timezone or 'UTC'
-    try:
-        tz = timezone(client_timezone)
-    except Exception:
-        tz = timezone.utc
-    
-    # Store timezone-aware datetime objects
-    now = datetime.now(tz)
-    current_date = now.date()
-    current_time = now.time()
-    
-    # Check if attendance record exists for this date
-    existing_record = db.query(AttendanceSheet).filter(
-        AttendanceSheet.device_id == request.device_id,
-        AttendanceSheet.date == current_date
-    ).first()
-    
-    if existing_record:
-        # Record exists - update check-in/check-out
-        if existing_record.check_in is None:
-            # First heartbeat of the day - set check-in to NOW, leave check_out as None
-            existing_record.check_in = current_time
-            existing_record.check_out = None
-            db.commit()
-            return {"status": "success", "message": "Check-in recorded", "action": "check_in"}
-        elif existing_record.check_out is None:
-            # Already checked in - set check-out to NOW (don't change check-in)
-            existing_record.check_out = current_time
-            db.commit()
-            return {"status": "success", "message": "Check-out recorded", "action": "check_out"}
-        else:
-            # Already checked in and out - update check-out to latest time
-            existing_record.check_out = current_time
-            db.commit()
-            return {"status": "success", "message": "Check-out updated", "action": "check_out_updated"}
-    else:
-        # No record exists - create new one (handled by AttendanceService)
-        AttendanceService.record_heartbeat(db, request.device_id)
-        return {"status": "success", "message": "Heartbeat recorded", "action": "new_record"}
+    return {"status": "success", "message": "Heartbeat recorded", "action": "time_recorded"}
 
 
 @app.get("/api/settings")
@@ -383,7 +329,8 @@ async def get_settings(
         "start_date": settings.start_date,
         "end_date": settings.end_date,
         "working_days": working_days,
-        "daily_required_minutes": settings.daily_required_minutes
+        "daily_working_hours": settings.daily_working_hours,
+        "daily_required_minutes": settings.daily_working_hours * 60
     }
 
 
@@ -399,7 +346,7 @@ async def update_settings(
         start_date=request.start_date,
         end_date=request.end_date,
         working_days=json.dumps(request.working_days),
-        daily_required_minutes=request.daily_required_minutes
+        daily_working_hours=request.daily_working_hours
     )
     
     # Recalculate time_required for all attendance records
@@ -407,7 +354,7 @@ async def update_settings(
     AttendanceService.update_time_required_for_all(
         db, 
         settings.device_id, 
-        settings.daily_required_minutes, 
+        settings.daily_working_hours,
         working_days
     )
     
@@ -415,7 +362,8 @@ async def update_settings(
         "start_date": settings.start_date,
         "end_date": settings.end_date,
         "working_days": working_days,
-        "daily_required_minutes": settings.daily_required_minutes
+        "daily_working_hours": settings.daily_working_hours,
+        "daily_required_minutes": settings.daily_working_hours * 60
     }
 
 
@@ -515,7 +463,7 @@ async def update_settings_form(
     db: Session = Depends(get_db),
     start_date: Optional[str] = Form(None),
     end_date: Optional[str] = Form(None),
-    daily_required_hours: Optional[str] = Form("8"),
+    daily_working_hours: Optional[str] = Form("8"),
     saturday: Optional[str] = Form(None),
     sunday: Optional[str] = Form(None),
     monday: Optional[str] = Form(None),
@@ -551,11 +499,11 @@ async def update_settings_form(
     if thursday: working_days.append(3)
     if friday: working_days.append(4)
     
-    # Parse daily required hours
+    # Parse daily working hours
     try:
-        daily_required_minutes = int(float(daily_required_hours) * 60)
+        daily_working_hours_float = float(daily_working_hours)
     except (ValueError, TypeError):
-        daily_required_minutes = 8 * 60  # Default 8 hours
+        daily_working_hours_float = 8.0  # Default 8 hours
     
     # Get current settings to check if dates are being updated
     current_settings = AttendanceService.get_settings(db)
@@ -570,7 +518,7 @@ async def update_settings_form(
         start_date=start_date_obj,
         end_date=end_date_obj,
         working_days=json.dumps(working_days),
-        daily_required_minutes=daily_required_minutes
+        daily_working_hours=daily_working_hours_float
     )
     
     # Update attendance records after settings are saved
@@ -623,11 +571,11 @@ async def update_settings_form(
                 description = None
             
             if current_date in existing_by_date:
-                # Update existing record - preserve category, check-in, check-out
+                # Update existing record - preserve category, time_recorded
                 existing_record = existing_by_date[current_date]
                 existing_record.device_id = device_id
-                # Only update time_required based on existing category and new settings
-                existing_record.time_required = AttendanceService.calculate_time_required(existing_record.category, daily_required_minutes)
+                # Only update time_required based on existing category
+                existing_record.time_required = AttendanceService.calculate_time_required(existing_record.category, daily_working_hours_float)
                 # Add to update list as dictionary (only update time_required)
                 records_to_update.append({
                     'id': existing_record.id,
@@ -641,7 +589,7 @@ async def update_settings_form(
                     "category": category,
                     "device_id": device_id,
                     "description": description,
-                    "time_required": AttendanceService.calculate_time_required(category, daily_required_minutes)
+                    "time_required": AttendanceService.calculate_time_required(category, daily_working_hours_float)
                 })
             
             current_date += timedelta(days=1)

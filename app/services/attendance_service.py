@@ -7,10 +7,13 @@ import json
 class AttendanceService:
     @staticmethod
     def record_heartbeat(db: Session, device_id: str):
-        """Record a new heartbeat"""
+        """Record a new heartbeat - now simply increments time_recorded by 1 minute"""
         now = datetime.now()
         today = now.date()
-        current_time = now.time()
+        
+        # Get settings to get daily working hours
+        settings = AttendanceService.get_settings(db)
+        daily_working_hours = settings.daily_working_hours if settings else 8
         
         # Get or create today's attendance record
         record = db.query(AttendanceSheet).filter(
@@ -23,15 +26,14 @@ class AttendanceService:
             record = AttendanceSheet(
                 device_id=device_id,
                 date=today,
-                category=0  # Default to workday
+                category=0,  # Default to workday
+                time_recorded=1,  # Start with 1 minute for this heartbeat
+                time_required=AttendanceService.calculate_time_required(0, daily_working_hours)
             )
             db.add(record)
-        
-        # Update check-in/check-out times
-        if not record.check_in:
-            record.check_in = current_time
         else:
-            record.check_out = current_time
+            # Increment time_recorded by 1 minute for each heartbeat
+            record.time_recorded += 1
         
         db.commit()
         return record
@@ -52,7 +54,7 @@ class AttendanceService:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         working_days: Optional[str] = None,
-        daily_required_minutes: Optional[int] = None
+        daily_working_hours: float = 8.0
     ) -> Optional[Settings]:
         """Update settings"""
         settings = db.query(Settings).first()
@@ -65,8 +67,8 @@ class AttendanceService:
             settings.end_date = end_date
         if working_days is not None:
             settings.working_days = working_days
-        if daily_required_minutes is not None:
-            settings.daily_required_minutes = daily_required_minutes
+        if daily_working_hours is not None:
+            settings.daily_working_hours = daily_working_hours
             
         db.commit()
         db.refresh(settings)
@@ -91,8 +93,10 @@ class AttendanceService:
         ]
 
     @staticmethod
-    def calculate_time_required(category: int, daily_required_minutes: int) -> int:
-        """Calculate required time in minutes based on category"""
+    def calculate_time_required(category: int, daily_working_hours: float) -> int:
+        """Calculate required time in minutes based on category and daily working hours"""
+        daily_required_minutes = int(daily_working_hours * 60)
+        
         if category == 0:
             # Regular workday - full required time
             return daily_required_minutes
@@ -113,7 +117,7 @@ class AttendanceService:
             return daily_required_minutes
     
     @staticmethod
-    def update_time_required_for_date(db: Session, device_id: str, date: date, daily_required_minutes: int):
+    def update_time_required_for_date(db: Session, device_id: str, date: date, daily_working_hours: float):
         """Update time_required for a specific attendance record"""
         record = db.query(AttendanceSheet).filter(
             AttendanceSheet.device_id == device_id,
@@ -121,28 +125,24 @@ class AttendanceService:
         ).first()
         
         if record:
-            record.time_required = AttendanceService.calculate_time_required(
-                record.category, daily_required_minutes
-            )
+            record.time_required = AttendanceService.calculate_time_required(record.category, daily_working_hours)
             db.commit()
     
     @staticmethod
-    def update_time_required_for_all(db: Session, device_id: str, daily_required_minutes: int, working_days: List[int]):
+    def update_time_required_for_all(db: Session, device_id: str, daily_working_hours: float, working_days: List[int]):
         """Update time_required for all attendance records for a device"""
         records = db.query(AttendanceSheet).filter(
             AttendanceSheet.device_id == device_id
         ).all()
         
         for record in records:
-            record.time_required = AttendanceService.calculate_time_required(
-                record.category, daily_required_minutes
-            )
+            record.time_required = AttendanceService.calculate_time_required(record.category, daily_working_hours)
         
         db.commit()
     
     @staticmethod
     def update_time_required_for_date_range(db: Session, device_id: str, start_date: date, end_date: date, 
-                                          daily_required_minutes: int, working_days: List[int]):
+                                          daily_working_hours: float, working_days: List[int]):
         """Update time_required for a date range, creating records if needed"""
         current_date = start_date
         delta = timedelta(days=1)
@@ -163,14 +163,12 @@ class AttendanceService:
                     device_id=device_id,
                     date=current_date,
                     category=category,
-                    time_required=AttendanceService.calculate_time_required(category, daily_required_minutes)
+                    time_required=AttendanceService.calculate_time_required(category, daily_working_hours)
                 )
                 db.add(record)
             else:
                 # Update existing record
-                record.time_required = AttendanceService.calculate_time_required(
-                    record.category, daily_required_minutes
-                )
+                record.time_required = AttendanceService.calculate_time_required(record.category, daily_working_hours)
             
             current_date += delta
         
@@ -208,7 +206,6 @@ class AttendanceService:
             # Update existing record to mark as holiday
             existing.category = 90  # Holiday
             existing.description = description
-            existing.updated_at = datetime.utcnow()
             # Update device_id if it's different
             if existing.device_id != device_id:
                 existing.device_id = device_id
@@ -221,9 +218,7 @@ class AttendanceService:
                 date=date,
                 category=90,  # Holiday
                 description=description,
-                time_required=0,  # No required time for holidays
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                time_required=0  # No required time for holidays
             )
             db.add(holiday)
         
@@ -266,7 +261,7 @@ class AttendanceService:
         if is_working_day:
             # It's a working day - convert to regular workday
             new_category = 0
-            new_time_required = settings.daily_required_minutes
+            new_time_required = settings.daily_working_hours * 60  # Convert hours to minutes
         else:
             # It's a weekend - keep as weekend
             new_category = 1
@@ -276,7 +271,6 @@ class AttendanceService:
         holiday.category = new_category
         holiday.description = None  # Remove holiday description
         holiday.time_required = new_time_required
-        holiday.updated_at = datetime.utcnow()
         
         db.commit()
         return True

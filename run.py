@@ -23,7 +23,7 @@ def main():
     
     # Default configuration
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", "10000"))
     reload = os.getenv("RELOAD", "false").lower() == "true"
     
     print(f"🚀 Starting Time Attendance Tracker")

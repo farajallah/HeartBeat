@@ -5,12 +5,13 @@ services:
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python run.py"
+    startCommand: "python init_db.py && python run.py"
     healthCheckPath: /health
     runtime: python-3.11
     
     # Environment variables
     envVars:
+      # Server Configuration
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: HOST
@@ -19,7 +20,17 @@ services:
         value: 10000
       - key: RELOAD
         value: false
+      
+      # Database Configuration
       - key: DATABASE_URL
         value: ${DATABASE_URL}
+      
+      # Security
       - key: BEARER_TOKEN
         generateValue: true
+      - key: DEVICE_ID
+        value: DEFAULT
+      
+      # Logging
+      - key: LOG_LEVEL
+        value: INFO

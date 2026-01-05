@@ -4,30 +4,33 @@ A simple, deterministic time attendance system with local heartbeat agent and we
 
 ## Features
 
-- **Local heartbeat agent** that tracks check-in/check-out times
-- **FastAPI web server** with SQLite database
+- **Local heartbeat agent** that tracks time worked
+- **FastAPI web server** with SQLite/PostgreSQL database
 - **Clean web dashboard** with balance overview and monthly summaries
-- **Settings management** for working days, holidays, and daily requirements
+- **Settings management** for working days, holidays, and daily working hours
 - **Intelligent balance calculation** based on `time_required` and actual work time
 - **Holiday/Leave management** with automatic time calculation
-- **Minimal dependencies** and simple deployment
+- **Fractional working hours support** (e.g., 7.5 hours)
+- **Render.com deployment ready**
 
 ## Quick Start
 
-### 1. Install Dependencies
+### Local Development
+
+#### 1. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
+#### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 # Edit .env with your BEARER_TOKEN
 ```
 
-### 3. Start the Server
+#### 3. Start the Server
 
 ```bash
 python run.py
@@ -162,6 +165,53 @@ The system uses SQLite with a single file `attendance.db`. Database is created a
 - Added `time_required` column with non-negative constraint
 - Fixed check-in/check-out constraint violations
 - Proper handling of same-time check-in/check-out scenarios
+
+## Render.com Deployment
+
+### Quick Deploy to Render
+
+1. **Push to GitHub**:
+   ```bash
+   git add .
+   git commit -m "Ready for Render deployment"
+   git push origin main
+   ```
+
+2. **Create PostgreSQL Database**:
+   - Go to Render Dashboard → New → PostgreSQL
+   - Choose free tier and create database
+
+3. **Deploy Web Service**:
+   - Go to Render Dashboard → New → Web Service
+   - Connect your GitHub repository
+   - Render will automatically detect `render.yaml`
+   - Add `DATABASE_URL` from your PostgreSQL database
+   - Click "Create Web Service"
+
+4. **Configure Heartbeat Agent**:
+   ```bash
+   # Update your local .env
+   SERVER_URL=https://your-app.onrender.com
+   BEARER_TOKEN=your-render-bearer-token
+   ```
+
+### Required Files for Render
+
+- `render.yaml` - Render service configuration
+- `requirements.txt` - Python dependencies
+- `init_db.py` - Database initialization script
+- `run.py` - Application startup script
+- `.env.example` - Environment variables template
+
+### Environment Variables
+
+The following are automatically configured by `render.yaml`:
+- `HOST`: 0.0.0.0 (Render requirement)
+- `PORT`: 10000 (Render default)
+- `DATABASE_URL`: Your PostgreSQL connection string
+- `BEARER_TOKEN`: Auto-generated authentication token
+
+For detailed deployment instructions, see [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md).
 
 ## Troubleshooting
 

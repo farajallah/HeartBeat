@@ -82,7 +82,7 @@ def init_default_settings():
                 start_date=start_date,
                 end_date=end_date,
                 working_days=default_working_days,
-                daily_required_minutes=8 * 60  # 8 hours = 480 minutes
+                daily_working_hours=8.0  # Default 8 hours
             )
             db.add(default_settings)
             db.commit()
@@ -123,7 +123,7 @@ def ensure_time_required_populated(db: Session):
         # Update each record
         for record in records_missing_time_required:
             record.time_required = AttendanceService.calculate_time_required(
-                record.category, settings.daily_required_minutes
+                record.category, settings.daily_working_hours
             )
         
         db.commit()
@@ -169,15 +169,14 @@ def initialize_attendance_records(db: Session, settings: Settings):
                 device_id=settings.device_id,
                 date=current_date,
                 category=category,
-                time_required=0 if category in [1, 11, 90] else (settings.daily_required_minutes // 2 if category == 10 else settings.daily_required_minutes),
-                check_in=None,
-                check_out=None
+                time_required=AttendanceService.calculate_time_required(category, settings.daily_working_hours),
+                time_recorded=0  # Start with 0 minutes recorded
             )
             db.add(record)
         else:
             # Update existing record to ensure time_required is set
             if existing.time_required is None:
-                existing.time_required = 0 if existing.category in [1, 11, 90] else (settings.daily_required_minutes // 2 if existing.category == 10 else settings.daily_required_minutes)
+                existing.time_required = AttendanceService.calculate_time_required(existing.category, settings.daily_working_hours)
     
         current_date += delta
     
