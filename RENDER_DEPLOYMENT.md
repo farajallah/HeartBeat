@@ -98,10 +98,11 @@ The following environment variables are automatically configured by `render.yaml
 
 ## Database Initialization
 
-The application automatically initializes the database on first deployment:
-- Creates all necessary tables
-- Sets up default settings (8 working hours, Mon-Fri)
-- Populates time_required values for all dates
+The application automatically initializes the database on startup:
+- SQLAlchemy creates tables based on models in `app/models.py`
+- Default settings are created (8 hours, Mon-Fri work week)
+- Time required values are populated for all dates
+- No manual database setup required
 
 ## Troubleshooting
 

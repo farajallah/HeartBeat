@@ -199,7 +199,6 @@ The system uses SQLite with a single file `attendance.db`. Database is created a
 
 - `render.yaml` - Render service configuration
 - `requirements.txt` - Python dependencies
-- `init_db.py` - Database initialization script
 - `run.py` - Application startup script
 - `.env.example` - Environment variables template
 
@@ -211,7 +210,13 @@ The following are automatically configured by `render.yaml`:
 - `DATABASE_URL`: Your PostgreSQL connection string
 - `BEARER_TOKEN`: Auto-generated authentication token
 
-For detailed deployment instructions, see [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md).
+### Database Initialization
+
+The application automatically initializes the database on startup:
+- SQLAlchemy creates tables based on models in `app/models.py`
+- Default settings are created (8 hours, Mon-Fri work week)
+- Time required values are populated for all dates
+- No manual database setup required
 
 ## Troubleshooting
 

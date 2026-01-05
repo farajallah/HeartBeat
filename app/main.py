@@ -662,6 +662,10 @@ async def delete_holiday_form(
     return RedirectResponse(url="/settings", status_code=303)
 
 
+# Initialize database on startup
+create_tables()
+init_default_settings()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
