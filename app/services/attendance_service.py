@@ -76,20 +76,28 @@ class AttendanceService:
 
     @staticmethod
     def get_holidays(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
-        """Get holidays within a date range"""
-        query = db.query(AttendanceSheet).filter(AttendanceSheet.category == 90)  # 90 is holiday category
+        """Get holidays and leaves as individual days"""
+        # Get all holidays and leaves (categories 90, 11, 10)
+        query = db.query(AttendanceSheet).filter(
+            AttendanceSheet.category.in_([90, 11, 10])  # Holiday, Leave full day, Leave half day
+        )
         
         if start_date:
             query = query.filter(AttendanceSheet.date >= start_date)
         if end_date:
             query = query.filter(AttendanceSheet.date <= end_date)
             
+        # Order by date
+        results = query.order_by(AttendanceSheet.date.asc()).all()
+        
+        # Return individual days
         return [
             {
-                "date": holiday.date,
-                "description": holiday.description or "Holiday"
+                'date': record.date,
+                'category': record.category,
+                'description': record.description or ''
             }
-            for holiday in query.all()
+            for record in results
         ]
 
     @staticmethod
@@ -175,6 +183,137 @@ class AttendanceService:
         db.commit()
     
     @staticmethod
+    def add_holiday_range(db: Session, start_date: date, end_date: date, category: int, description: str) -> Optional[Dict[str, Any]]:
+        """Add holidays/leaves for a date range with proper time_required calculation"""
+        from datetime import timedelta
+        
+        # Get current settings to get the device_id and daily_working_hours
+        settings = db.query(Settings).first()
+        if not settings:
+            raise ValueError("No settings found. Please configure settings first.")
+        
+        device_id = settings.device_id
+        daily_working_hours = settings.daily_working_hours
+        
+        # Clean up any existing records with invalid device_id
+        orphaned_records = db.query(AttendanceSheet).filter(
+            AttendanceSheet.device_id.notin_(
+                db.query(Settings.device_id)
+            )
+        ).all()
+        
+        if orphaned_records:
+            print(f"Cleaning up {len(orphaned_records)} orphaned attendance records")
+            for record in orphaned_records:
+                db.delete(record)
+            db.commit()
+        
+        # Get working days for weekend calculation
+        working_days_set = set()
+        if settings.working_days:
+            # Handle both JSON array format and comma-separated string format
+            working_days_str = settings.working_days.strip()
+            
+            if working_days_str.startswith('[') and working_days_str.endswith(']'):
+                # JSON array format: [6, 0, 1, 2, 3]
+                try:
+                    import json
+                    working_days_array = json.loads(working_days_str)
+                    working_days_set = set(working_days_array)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            else:
+                # Comma-separated string format: Mon,Tue,Wed,Thu,Fri
+                day_mapping = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
+                working_days_set = {day_mapping[day] for day in working_days_str.split(',') if day in day_mapping}
+        
+        added_days = []
+        current_date = start_date
+        
+        while current_date <= end_date:
+            # Check if it's a weekend
+            day_of_week = current_date.weekday()  # 0=Monday, 6=Sunday
+            is_weekend = day_of_week not in working_days_set
+            
+            # Check if it's already a holiday
+            existing_holiday = db.query(AttendanceSheet).filter(
+                AttendanceSheet.date == current_date,
+                AttendanceSheet.category == 90  # Holiday category
+            ).first()
+            is_holiday = existing_holiday is not None
+            
+            # Skip weekends and existing holidays when adding leave
+            if (is_weekend or is_holiday) and category in [10, 11]:  # Leave types
+                current_date += timedelta(days=1)
+                continue
+            
+            # Auto-generate description for leaves if not provided
+            final_description = description
+            if not description or not description.strip():
+                if category == 11:
+                    final_description = "Leave (full day)"
+                elif category == 10:
+                    final_description = "Leave (half day)"
+            
+            # Check if there's already an attendance record for this date
+            existing = db.query(AttendanceSheet).filter(
+                AttendanceSheet.date == current_date
+            ).first()
+            
+            if existing:
+                # Only update if the new category has higher priority
+                # Holiday (90) > Leave full day (11) > Leave half day (10) > Workday (0) > Weekend (1)
+                if category > existing.category or (category == 90 and existing.category != 90):
+                    existing.category = category
+                    existing.description = final_description
+                    # Update device_id if it's different
+                    if existing.device_id != device_id:
+                        existing.device_id = device_id
+                    
+                    # Calculate time_required based on category
+                    if category == 90:  # Holiday
+                        existing.time_required = 0
+                    elif category == 11:  # Leave (full day)
+                        existing.time_required = 0
+                    elif category == 10:  # Leave (half day)
+                        existing.time_required = AttendanceService.calculate_time_required(category, daily_working_hours)
+                    
+                    added_days.append(current_date)
+            else:
+                # Create new record
+                time_required = AttendanceService.calculate_time_required(category, daily_working_hours)
+                
+                new_record = AttendanceSheet(
+                    device_id=device_id,
+                    date=current_date,
+                    time_recorded=0,
+                    category=category,
+                    description=final_description,
+                    time_required=time_required
+                )
+                db.add(new_record)
+                added_days.append(current_date)
+            
+            current_date += timedelta(days=1)
+        
+        db.commit()
+        
+        # Calculate total days in range and skipped days
+        total_days = (end_date - start_date).days + 1
+        skipped_days = total_days - len(added_days)
+        
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "category": category,
+            "description": description,
+            "total_days": total_days,
+            "added_days": len(added_days),
+            "skipped_days": skipped_days,
+            "processed_dates": added_days
+        }
+    
+    @staticmethod
     def add_holiday(db: Session, date: date, description: str) -> Optional[Dict[str, Any]]:
         """Add a new holiday by marking the day as holiday in attendance sheet"""
         # Get current settings to get the device_id
@@ -230,16 +369,17 @@ class AttendanceService:
 
     @staticmethod
     def delete_holiday(db: Session, date: date) -> bool:
-        """Convert holiday to working day (if applicable)"""
-        holiday = db.query(AttendanceSheet).filter(
+        """Delete holiday/leave and convert to working day (if applicable)"""
+        # Find any holiday/leave record for this date
+        record = db.query(AttendanceSheet).filter(
             AttendanceSheet.date == date,
-            AttendanceSheet.category == 90
+            AttendanceSheet.category.in_([90, 11, 10])  # Holiday, Leave full day, Leave half day
         ).first()
         
-        if not holiday:
+        if not record:
             return False
         
-        # Get settings to determine working days and daily required minutes
+        # Get settings to determine working days
         settings = db.query(Settings).first()
         if not settings:
             return False
@@ -259,18 +399,16 @@ class AttendanceService:
         
         # Determine new category based on day type
         if is_working_day:
-            # It's a working day - convert to regular workday
-            new_category = 0
-            new_time_required = settings.daily_working_hours * 60  # Convert hours to minutes
+            new_category = 0  # Workday
+            new_description = None
         else:
-            # It's a weekend - keep as weekend
-            new_category = 1
-            new_time_required = 0
+            new_category = 1  # Weekend
+            new_description = "Weekend"
         
         # Update the record
-        holiday.category = new_category
-        holiday.description = None  # Remove holiday description
-        holiday.time_required = new_time_required
+        record.category = new_category
+        record.description = new_description
+        record.time_required = AttendanceService.calculate_time_required(new_category, settings.daily_working_hours)
         
         db.commit()
         return True

@@ -32,17 +32,17 @@
                     <form method="post" action="/settings" class="space-y-4">
                         <!-- Start Date -->
                         <div>
-                            <label for="start_date" class="block text-sm font-medium text-gray-700">Start Date</label>
-                            <input type="date" id="start_date" name="start_date" 
-                                   value="{% if settings and settings.start_date %}{{ settings.start_date }}{% endif %}"
+                            <label for="settings_start_date" class="block text-sm font-medium text-gray-700">Start Date</label>
+                            <input type="date" id="settings_start_date" name="start_date" 
+                                   value="{% if settings and settings.start_date %}{{ settings.start_date }}{% else %}{{ today }}{% endif %}"
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                         </div>
 
                         <!-- End Date -->
                         <div>
-                            <label for="end_date" class="block text-sm font-medium text-gray-700">End Date</label>
-                            <input type="date" id="end_date" name="end_date"
-                                   value="{% if settings and settings.end_date %}{{ settings.end_date }}{% endif %}"
+                            <label for="settings_end_date" class="block text-sm font-medium text-gray-700">End Date</label>
+                            <input type="date" id="settings_end_date" name="end_date"
+                                   value="{% if settings and settings.end_date %}{{ settings.end_date }}{% else %}{{ today }}{% endif %}"
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                         </div>
 
@@ -85,54 +85,131 @@
             <!-- Holidays Management -->
             <div class="bg-white shadow sm:rounded-lg">
                 <div class="px-4 py-5 sm:p-6">
-                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Holidays</h3>
+                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Holidays & Leaves</h3>
                     
-                    <!-- Add Holiday Form -->
+                    <!-- Add Holiday/Leave Form -->
                     <form method="post" action="/holidays" class="space-y-4 mb-6">
                         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div>
-                                <label for="holiday_date" class="block text-sm font-medium text-gray-700">Date</label>
-                                <input type="date" id="holiday_date" name="holiday_date" required
+                                <label for="type" class="block text-sm font-medium text-gray-700">Type</label>
+                                <select id="type" name="type" required
+                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                        <option value="11">Leave (full day)</option>
+                                        <option value="10">Leave (half day)</option>
+                                        <option value="90">Holiday</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="description" class="block text-sm font-medium text-gray-700">
+                                    Description <span id="desc-required" class="text-red-500">*</span>
+                                </label>
+                                <input type="text" id="description" name="description" 
+                                       placeholder="Required for holidays, auto-generated for leaves"
+                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div>
+                                <label for="start_date" class="block text-sm font-medium text-gray-700">Start Date</label>
+                                <input type="date" id="start_date" name="start_date" required
                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                             </div>
                             <div>
-                                <label for="description" class="block text-sm font-medium text-gray-700">Description</label>
-                                <input type="text" id="description" name="description" required
+                                <label for="end_date" class="block text-sm font-medium text-gray-700">End Date</label>
+                                <input type="date" id="end_date" name="end_date" required
                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
                             </div>
                         </div>
                         <button type="submit" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-                            Add Holiday
+                            Add Holiday/Leave
                         </button>
                     </form>
 
-                    <!-- Holidays List -->
+                    <!-- Holidays/Leaves List -->
                     <div class="border-t pt-4">
-                        <h4 class="text-md font-medium text-gray-900 mb-3">Current Holidays</h4>
+                        <h4 class="text-md font-medium text-gray-900 mb-3">Current Holidays & Leaves</h4>
                         {% if holidays %}
                         <div class="space-y-2">
                             {% for holiday in holidays %}
-                            <div class="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-md">
-                                <div>
-                                    <span class="text-sm font-medium text-gray-900">{{ holiday.date }}</span>
-                                    <span class="ml-2 text-sm text-gray-500">{{ holiday.description }}</span>
+                                <div class="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-md">
+                                    <div>
+                                        <span class="text-sm font-medium text-gray-900">{{ holiday.date }}</span>
+                                        <span class="ml-2 px-2 py-1 text-xs rounded-full
+                                            {% if holiday.category == 90 %}bg-red-100 text-red-800{% endif %}
+                                            {% if holiday.category == 11 %}bg-orange-100 text-orange-800{% endif %}
+                                            {% if holiday.category == 10 %}bg-yellow-100 text-yellow-800{% endif %}
+                                        ">
+                                            {% if holiday.category == 90 %}Holiday{% endif %}
+                                            {% if holiday.category == 11 %}Leave (full day){% endif %}
+                                            {% if holiday.category == 10 %}Leave (half day){% endif %}
+                                        </span>
+                                        <span class="ml-2 text-sm text-gray-500">{{ holiday.description }}</span>
+                                    </div>
+                                    <form method="post" action="/holidays/{{ holiday.date }}/delete" 
+                                          onsubmit="return confirm('Are you sure you want to delete this holiday/leave for {{ holiday.date }}?')">
+                                        <button type="submit" class="text-red-600 hover:text-red-900 text-sm font-medium">
+                                            Delete
+                                        </button>
+                                    </form>
                                 </div>
-                                <form method="post" action="/holidays/{{ holiday.date }}/delete" 
-                                      onsubmit="return confirm('Are you sure you want to delete this holiday?')">
-                                    <button type="submit" class="text-red-600 hover:text-red-900 text-sm font-medium">
-                                        Delete
-                                    </button>
-                                </form>
-                            </div>
                             {% endfor %}
                         </div>
                         {% else %}
-                        <p class="text-sm text-gray-500">No holidays defined</p>
+                        <p class="text-sm text-gray-500">No holidays or leaves defined</p>
                         {% endif %}
                     </div>
                 </div>
             </div>
         </div>
     </main>
+    
+    <script>
+        // Handle holiday/leave date range functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const startDateInput = document.getElementById('start_date');
+            const endDateInput = document.getElementById('end_date');
+            const typeSelect = document.getElementById('type');
+            const descriptionInput = document.getElementById('description');
+            const descRequired = document.getElementById('desc-required');
+            
+            // Only run if holiday form elements exist
+            if (startDateInput && endDateInput && typeSelect && descriptionInput) {
+                // Set current date as default for holiday form
+                const today = new Date().toISOString().split('T')[0];
+                startDateInput.value = today;
+                endDateInput.value = today;
+                
+                // Handle description requirement based on type
+                function updateDescriptionRequirement() {
+                    const isHoliday = typeSelect.value === '90';
+                    if (isHoliday) {
+                        descriptionInput.required = true;
+                        descRequired.style.display = 'inline';
+                    } else {
+                        descriptionInput.required = false;
+                        descRequired.style.display = 'none';
+                    }
+                }
+                
+                // Initial setup
+                updateDescriptionRequirement();
+                
+                // Update when type changes
+                typeSelect.addEventListener('change', updateDescriptionRequirement);
+                
+                // Set end date to match start date initially
+                startDateInput.addEventListener('change', function() {
+                    endDateInput.value = this.value;
+                });
+                
+                // Prevent end date from being before start date
+                endDateInput.addEventListener('change', function() {
+                    if (this.value < startDateInput.value) {
+                        this.value = startDateInput.value;
+                    }
+                });
+            }
+        });
+    </script>
 </body>
 </html>

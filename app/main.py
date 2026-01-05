@@ -455,6 +455,7 @@ async def settings_page(request: Request, db: Session = Depends(get_db)):
         "holidays": holidays,
         "working_days": working_days,
         "weekday_names": weekday_names,
+        "today": date.today().strftime("%Y-%m-%d"),
     })
 
 
@@ -549,6 +550,7 @@ async def update_settings_form(
         
         # Get all holidays for the period
         holidays_list = AttendanceService.get_holidays(db, start_date_obj, end_date_obj)
+        # Convert to dictionary for easy lookup
         holidays = {h['date']: h for h in holidays_list}
         
         # Prepare batch operations
@@ -562,8 +564,9 @@ async def update_settings_form(
             
             # Determine category based on priority: Holiday > Weekend > Workday
             if current_date in holidays:
-                category = 90  # Holiday
-                description = holidays[current_date].get('description', 'Holiday')
+                holiday_data = holidays[current_date]
+                category = holiday_data['category']  # Use actual category (90, 11, or 10)
+                description = holiday_data.get('description', 'Holiday')
             elif day_of_week not in working_days:
                 category = 1  # Weekend
                 description = None
@@ -633,18 +636,34 @@ async def update_settings_form(
 async def add_holiday_form(
     request: Request,
     db: Session = Depends(get_db),
-    holiday_date: str = Form(...),
-    description: str = Form(...),
+    type: int = Form(...),
+    start_date: str = Form(...),
+    end_date: str = Form(...),
+    description: str = Form(""),
 ):
-    """Handle holiday form submission"""
+    """Handle holiday/leave form submission"""
     try:
-        date_obj = datetime.strptime(holiday_date, "%Y-%m-%d").date()
-    except ValueError:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        # Validate date range
+        if end_date_obj < start_date_obj:
+            return RedirectResponse(url="/settings", status_code=303)
+        
+        # Validate description requirement for holidays
+        if type == 90 and not description.strip():
+            return RedirectResponse(url="/settings", status_code=303)
+        
+        AttendanceService.add_holiday_range(db, start_date_obj, end_date_obj, type, description)
+        return RedirectResponse(url="/settings", status_code=303)
+    except ValueError as e:
         # Handle error - for now, redirect back
         return RedirectResponse(url="/settings", status_code=303)
-    
-    AttendanceService.add_holiday(db, date_obj, description)
-    return RedirectResponse(url="/settings", status_code=303)
+    except Exception as e:
+        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return RedirectResponse(url="/settings", status_code=303)
 
 
 @app.post("/holidays/{holiday_date}/delete")
