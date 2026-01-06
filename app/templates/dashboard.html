@@ -19,6 +19,107 @@
         .balance-neutral {
             color: #6b7280;
         }
+        
+        .calendar-container {
+            max-width: 350px;
+            margin: 0 auto;
+        }
+        
+        .calendar-header {
+            text-align: center;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 0.5rem;
+        }
+        
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 0;
+            border: 1px solid #d1d5db;
+        }
+        
+        .calendar-weekday {
+            background-color: #f9fafb;
+            text-align: center;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #6b7280;
+            padding: 0.5rem 0;
+            border-right: 1px solid #d1d5db;
+        }
+        
+        .calendar-weekday:last-child {
+            border-right: none;
+        }
+        
+        .calendar-day {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-right: 1px solid #d1d5db;
+            border-bottom: 1px solid #d1d5db;
+        }
+        
+        .calendar-day:nth-child(7n) {
+            border-right: none;
+        }
+        
+        .calendar-day:hover {
+            background-color: #f3f4f6 !important;
+            z-index: 10;
+        }
+        
+        .calendar-day.today {
+            background-color: #dbeafe !important;
+            color: #1e40af !important;
+            font-weight: 700;
+            border: 2px solid #3b82f6;
+        }
+        
+        .calendar-day.empty {
+            cursor: default;
+        }
+        
+        .calendar-day.empty:hover {
+            background-color: white !important;
+        }
+        
+        .calendar-day.future-day {
+            opacity: 0.6;
+            cursor: default;
+        }
+        
+        .calendar-day.future-day:hover {
+            background-color: white !important;
+        }
+        
+        .main-legend {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 2rem;
+            font-size: 0.875rem;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border: 1px solid #d1d5db;
+        }
     </style>
 </head>
 
@@ -58,33 +159,115 @@
         </div>
 
         <!-- Monthly Calendar View -->
-        <div class="bg-white shadow overflow-hidden sm:rounded-lg mt-8">
-            <div class="px-4 py-5 sm:p-6">
-                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {% for month in monthly_summaries %}
-                    <div class="border rounded-lg overflow-hidden hover:shadow-md transition-shadow {% if month.is_future %}opacity-50 bg-gray-100{% endif %}">
-                        <div class="bg-gray-50 px-4 py-2 border-b">
-                            <h4 class="text-sm font-medium {% if month.is_future %}text-gray-400{% else %}text-gray-700{% endif %}">{{ month.month_name }}</h4>
-                        </div>
-                        <div class="p-4 text-center">
-                            <div
-                                class="text-2xl font-bold mb-1 {% if month.is_future %}text-gray-400{% elif month.balance >= 0 %}text-green-600{% else %}text-orange-500{% endif %}">
-                                {{ month.balance_formatted }}
-                            </div>
-                            <div class="text-xs {% if month.is_future %}text-gray-400{% else %}text-gray-500{% endif %} space-y-1">
-                                <div class="flex justify-between">
-                                    <span>Recorded:</span>
-                                    <span class="font-medium">{{ month.recorded_formatted }}</span>
-                                </div>
-                                <div class="flex justify-between">
-                                    <span>Required:</span>
-                                    <span class="font-medium">{{ month.required_formatted }}</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="h-2 {% if month.is_complete %}bg-green-500{% else %}bg-orange-500{% endif %}"></div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 mt-8">
+            {% for month in monthly_summaries %}
+            <div class="bg-white shadow overflow-hidden sm:rounded-lg p-4 {% if month.is_future %}opacity-60{% endif %}">
+                <div class="calendar-container">
+                    <!-- Month Header -->
+                    <div class="calendar-header {% if month.is_future %}text-gray-400{% endif %}">{{ month.month_name }}</div>
+                    
+                    <!-- Calendar Grid -->
+                    {% if month.is_future %}
+                    <!-- Future month - show empty grey calendar -->
+                    <div class="calendar-grid">
+                        <!-- Weekday headers starting from Saturday -->
+                        <div class="calendar-weekday">Sat</div>
+                        <div class="calendar-weekday">Sun</div>
+                        <div class="calendar-weekday">Mon</div>
+                        <div class="calendar-weekday">Tue</div>
+                        <div class="calendar-weekday">Wed</div>
+                        <div class="calendar-weekday">Thu</div>
+                        <div class="calendar-weekday">Fri</div>
+                        
+                        <!-- Empty calendar days (31 days max) -->
+                        {% for i in range(37) %}
+                            <div class="calendar-day empty"></div>
+                        {% endfor %}
                     </div>
-                    {% endfor %}
+                    {% else %}
+                    <!-- Current or past month - show actual data -->
+                    <div class="calendar-grid">
+                        <!-- Weekday headers starting from Saturday -->
+                        <div class="calendar-weekday">Sat</div>
+                        <div class="calendar-weekday">Sun</div>
+                        <div class="calendar-weekday">Mon</div>
+                        <div class="calendar-weekday">Tue</div>
+                        <div class="calendar-weekday">Wed</div>
+                        <div class="calendar-weekday">Thu</div>
+                        <div class="calendar-weekday">Fri</div>
+                        
+                        <!-- Empty cells for first week (adjusted for Saturday start) -->
+                        {% for day in month.daily_data %}
+                            {% if loop.index0 == 0 %}
+                                {% set first_day_weekday = day.date.weekday() %}
+                                {% set saturday_offset = (first_day_weekday + 1) % 7 %}
+                                {% for i in range(saturday_offset) %}
+                                    <div class="calendar-day empty"></div>
+                                {% endfor %}
+                            {% endif %}
+                            
+                            <!-- Day cell -->
+                            <div class="calendar-day {{ day.color_class }} {% if day.is_today %}today{% elif day.is_future %}future-day{% endif %}">
+                                {{ day.day }}
+                            </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    
+                    <!-- Monthly Summary -->
+                    <div class="border-t pt-3 mt-3">
+                        <div class="grid grid-cols-3 gap-2 text-center text-sm">
+                            <div>
+                                <div class="text-gray-500">Required</div>
+                                <div class="font-semibold {% if month.is_future %}text-gray-400{% else %}text-gray-900{% endif %}">
+                                    {% if month.is_future %}-{% else %}{{ month.required_formatted }}{% endif %}
+                                </div>
+                            </div>
+                            <div>
+                                <div class="text-gray-500">Recorded</div>
+                                <div class="font-semibold {% if month.is_future %}text-gray-400{% else %}text-gray-900{% endif %}">
+                                    {% if month.is_future %}-{% else %}{{ month.recorded_formatted }}{% endif %}
+                                </div>
+                            </div>
+                            <div>
+                                <div class="text-gray-500">Balance</div>
+                                <div class="font-semibold {% if month.is_future %}text-gray-400{% else %}{% if month.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}{% endif %}">
+                                    {% if month.is_future %}-{% else %}{{ month.balance_formatted }}{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Main Legend at Bottom -->
+        <div class="bg-white shadow overflow-hidden sm:rounded-lg p-4 mt-8">
+            <div class="main-legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #3b82f6;"></div>
+                    <span>Today</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #10b981;"></div>
+                    <span>Positive/Zero Balance</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #f97316;"></div>
+                    <span>Negative Balance</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #9ca3af;"></div>
+                    <span>Holiday</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #6b7280;"></div>
+                    <span>Weekend/Leave</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: white; border: 1px solid #d1d5db;"></div>
+                    <span>Future Day</span>
                 </div>
             </div>
         </div>

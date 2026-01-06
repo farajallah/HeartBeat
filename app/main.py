@@ -154,56 +154,201 @@ async def startup_event():
 
 def get_monthly_summaries(db: Session, start_date: date, end_date: date, settings: Settings):
     """Calculate monthly summaries for the calendar view"""
+    from datetime import timedelta
+    from app.services.attendance_service import AttendanceService
+    
     monthly_data = []
     current_month = start_date.replace(day=1)
     today = date.today()
     
     while current_month <= end_date:
-        # Only process months that are within the settings period
-        if settings.start_date and settings.end_date:
-            # Get first and last day of the month
-            first_day = current_month.replace(day=1)
-            last_day = (current_month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        # Determine if this is a future month
+        is_future_month = current_month > date(today.year, today.month, 1)
+        is_current_month = current_month == date(today.year, today.month, 1)
+        
+        # Get first and last day of the month
+        first_day = current_month.replace(day=1)
+        if current_month.month == 12:
+            next_month = current_month.replace(year=current_month.year + 1, month=1)
+        else:
+            next_month = current_month.replace(month=current_month.month + 1)
+        last_day = next_month - timedelta(days=1)
+        
+        # For future months, show grey with dashes
+        if is_future_month:
+            monthly_data.append({
+                "month": current_month.strftime('%Y-%m'),
+                "month_name": current_month.strftime('%B %Y'),
+                "recorded": 0,
+                "required": 0,
+                "recorded_formatted": "-",
+                "required_formatted": "-",
+                "balance": 0,
+                "balance_formatted": "-",
+                "is_complete": True,
+                "is_future": True,
+                "daily_data": []
+            })
+        else:
+            # Get all records for this month
+            records = db.query(AttendanceSheet).filter(
+                AttendanceSheet.date.between(first_day, last_day)
+            ).all()
             
-            # Adjust month boundaries to only include days within the settings period
-            month_start = max(first_day, settings.start_date, start_date)
-            month_end = min(last_day, settings.end_date, end_date)
+            # Get working days for this month
+            working_days_set = set()
+            if settings.working_days:
+                working_days_str = settings.working_days.strip()
+                if working_days_str.startswith('[') and working_days_str.endswith(']'):
+                    try:
+                        import json
+                        working_days_array = json.loads(working_days_str)
+                        working_days_set = set(working_days_array)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                else:
+                    day_mapping = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
+                    working_days_set = {day_mapping[day] for day in working_days_str.split(',') if day in day_mapping}
             
-            # Skip if no days in this month are within the settings period
-            if month_start > month_end:
-                current_month = current_month.replace(month=current_month.month + 1) if current_month.month < 12 else current_month.replace(year=current_month.year + 1, month=1)
-                continue
+            # Generate daily data for calendar
+            daily_data = []
+            total_required = 0
+            total_recorded = 0
             
-            # Check if this month is entirely in the future
-            is_future_month = month_start > today
-            
-            if is_future_month:
-                # For future months, show 0 values
-                total_recorded = 0
-                total_required = 0
-            else:
-                # Get records for the month (within settings period and up to today)
-                actual_month_end = min(month_end, today)
-                records = db.query(AttendanceSheet).filter(
-                    AttendanceSheet.device_id == settings.device_id,
-                    AttendanceSheet.date.between(month_start, actual_month_end)
-                ).all()
+            current_day = first_day
+            while current_day <= last_day:
+                day_of_week = current_day.weekday()
+                is_weekend = day_of_week not in working_days_set
+                is_today = current_day == today
+                is_future = current_day > today
                 
-                # Calculate totals using time_required column
-                total_required = 0
-                total_recorded = 0
-                
-                # Calculate total required minutes from time_required column
-                for record in records:
-                    # Use time_required from the record directly
-                    total_required += record.time_required
+                # For current month, only process days up to today for calculations
+                if is_current_month and is_future:
+                    # Add future days in current month but make them look like future months
+                    day_record = None
+                    for record in records:
+                        if record.date == current_day:
+                            day_record = record
+                            break
                     
-                    # Use time_recorded directly (already in minutes)
-                    total_recorded += record.time_recorded
+                    # Determine day type and color for future days (grey like future months)
+                    if day_record:
+                        category = day_record.category
+                        if category == 90:  # Holiday
+                            color_class = "bg-gray-400"
+                            day_type = "holiday"
+                        elif category == 11:  # Leave full day
+                            color_class = "bg-gray-300"
+                            day_type = "leave_full"
+                        elif category == 10:  # Leave half day
+                            color_class = "bg-gray-200"
+                            day_type = "leave_half"
+                        elif category == 1:  # Weekend
+                            color_class = "bg-gray-500"
+                            day_type = "weekend"
+                        else:  # Workday
+                            color_class = "bg-white"
+                            day_type = "workday"
+                    else:
+                        # No record - determine based on date
+                        if is_weekend:
+                            color_class = "bg-gray-500"
+                            day_type = "weekend"
+                        else:
+                            color_class = "bg-white"
+                            day_type = "workday"
+                    
+                    daily_data.append({
+                        "date": current_day,
+                        "day": current_day.day,
+                        "color_class": color_class,
+                        "day_type": day_type,
+                        "time_required": 0,
+                        "time_recorded": 0,
+                        "balance": 0,
+                        "is_today": is_today,
+                        "is_future": is_future
+                    })
+                else:
+                    # Process past days and today for calculations
+                    # Find record for this day
+                    day_record = None
+                    for record in records:
+                        if record.date == current_day:
+                            day_record = record
+                            break
+                    
+                    # Determine day type and color
+                    if day_record:
+                        category = day_record.category
+                        time_required = day_record.time_required
+                        time_recorded = day_record.time_recorded
+                        balance = time_recorded - time_required
+                        
+                        if category == 90:  # Holiday
+                            color_class = "bg-gray-400"
+                            day_type = "holiday"
+                        elif category == 11:  # Leave full day
+                            color_class = "bg-gray-300"
+                            day_type = "leave_full"
+                        elif category == 10:  # Leave half day
+                            color_class = "bg-gray-200"
+                            day_type = "leave_half"
+                        elif category == 1:  # Weekend
+                            color_class = "bg-gray-500"
+                            day_type = "weekend"
+                        else:  # Workday
+                            if is_today:
+                                color_class = "bg-blue-500"
+                            elif is_future:
+                                color_class = "bg-white"
+                            elif balance >= 0:  # Changed from balance > 0 to balance >= 0
+                                color_class = "bg-green-500"
+                            elif balance < 0:
+                                color_class = "bg-orange-500"
+                            else:
+                                color_class = "bg-white"
+                            day_type = "workday"
+                    else:
+                        # No record - determine based on date
+                        if is_weekend:
+                            color_class = "bg-gray-500"
+                            day_type = "weekend"
+                            time_required = 0
+                        else:
+                            time_required = AttendanceService.calculate_time_required(0, settings.daily_working_hours)
+                            if is_today:
+                                color_class = "bg-blue-500"
+                            elif is_future:
+                                color_class = "bg-white"
+                            else:
+                                color_class = "bg-white"
+                            day_type = "workday"
+                        
+                        time_recorded = 0
+                        balance = time_recorded - time_required
+                    
+                    daily_data.append({
+                        "date": current_day,
+                        "day": current_day.day,
+                        "color_class": color_class,
+                        "day_type": day_type,
+                        "time_required": time_required,
+                        "time_recorded": time_recorded,
+                        "balance": balance,
+                        "is_today": is_today,
+                        "is_future": is_future
+                    })
+                    
+                    total_required += time_required
+                    total_recorded += time_recorded
+                
+                current_day += timedelta(days=1)
             
-            # Add to monthly data
+            # Calculate monthly balance
             balance = total_recorded - total_required
             daily_minutes = int(settings.daily_working_hours * 60)
+            
             monthly_data.append({
                 "month": current_month.strftime('%Y-%m'),
                 "month_name": current_month.strftime('%B %Y'),
@@ -214,7 +359,8 @@ def get_monthly_summaries(db: Session, start_date: date, end_date: date, setting
                 "balance": balance,
                 "balance_formatted": format_balance_minutes(balance, daily_minutes),
                 "is_complete": total_recorded >= total_required if total_required > 0 else True,
-                "is_future": is_future_month if 'is_future_month' in locals() else False
+                "is_future": False,
+                "daily_data": daily_data
             })
         
         # Move to next month
